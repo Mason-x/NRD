@@ -1,0 +1,198 @@
+# 监控NRD文件更新的GitHub Actions工作流
+name: Monitor NRD File Updates
+
+on:
+  schedule:
+    # 每15分钟检查一次（GitHub Actions最小间隔）
+    - cron: '*/15 * * * *'
+  workflow_dispatch:  # 允许手动触发
+  push:
+    branches: [ main ]  # 推送到主分支时也触发（用于测试）
+
+jobs:
+  monitor-and-sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout current repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    
+    - name: Install dependencies
+      run: |
+        pip install requests
+    
+    - name: Monitor and download file updates
+      id: monitor
+      run: |
+        python << 'EOF'
+        import requests
+        import hashlib
+        import os
+        import json
+        from datetime import datetime
+        
+        def log(message):
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+        
+        # 配置
+        source_url = "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/30-day-mini/domains-only/nrd-30day-mini.txt"
+        state_file = "monitor_state.json"
+        downloads_dir = "downloads"
+        archive_dir = "archive"
+        
+        # 创建目录
+        os.makedirs(downloads_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
+        
+        log("开始检查NRD文件更新...")
+        
+        # 加载上次状态
+        last_state = {}
+        if os.path.exists(state_file):
+            try:
+                with open(state_file, 'r') as f:
+                    last_state = json.load(f)
+                log(f"加载上次状态: {last_state.get('last_update', '首次运行')}")
+            except Exception as e:
+                log(f"加载状态文件失败: {e}")
+        
+        try:
+            # 下载源文件
+            log(f"正在下载: {source_url}")
+            response = requests.get(source_url, timeout=30)
+            response.raise_for_status()
+            content = response.text.strip()
+            
+            if not content:
+                log("错误: 下载的文件内容为空")
+                exit(1)
+            
+            # 计算文件哈希
+            current_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
+            last_hash = last_state.get('hash', '')
+            
+            log(f"当前文件哈希: {current_hash[:16]}...")
+            log(f"上次文件哈希: {last_hash[:16] if last_hash else '无'}...")
+            
+            # 统计文件信息
+            lines = content.split('\n')
+            domain_count = len([line for line in lines if line.strip() and not line.startswith('#')])
+            
+            log(f"文件包含 {domain_count} 个域名")
+            
+            # 检查是否有更新
+            if current_hash != last_hash:
+                log("🎉 检测到文件更新!")
+                
+                # 生成时间戳和文件名
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"nrd-30day-mini_{timestamp}.txt"
+                
+                # 保存到downloads目录（最新版本）
+                latest_file = os.path.join(downloads_dir, "nrd-30day-mini-latest.txt")
+                with open(latest_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                log(f"✅ 最新版本已保存: {latest_file}")
+                
+                # 保存到archive目录（历史版本）
+                archive_file = os.path.join(archive_dir, filename)
+                with open(archive_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                log(f"📁 历史版本已保存: {archive_file}")
+                
+                # 创建更新摘要
+                summary = {
+                    "update_time": datetime.now().isoformat(),
+                    "timestamp": timestamp,
+                    "filename": filename,
+                    "hash": current_hash,
+                    "domain_count": domain_count,
+                    "file_size": len(content),
+                    "source_url": source_url
+                }
+                
+                # 更新状态文件
+                new_state = {
+                    "hash": current_hash,
+                    "last_update": datetime.now().isoformat(),
+                    "filename": filename,
+                    "domain_count": domain_count,
+                    "update_history": last_state.get('update_history', [])
+                }
+                
+                # 保留最近10次更新历史
+                new_state['update_history'].append(summary)
+                if len(new_state['update_history']) > 10:
+                    new_state['update_history'] = new_state['update_history'][-10:]
+                
+                with open(state_file, 'w') as f:
+                    json.dump(new_state, f, indent=2)
+                
+                # 创建更新报告
+                report_file = os.path.join(downloads_dir, "latest_update_report.md")
+                with open(report_file, 'w') as f:
+                    f.write(f"# NRD文件更新报告\n\n")
+                    f.write(f"- **更新时间**: {summary['update_time']}\n")
+                    f.write(f"- **文件哈希**: `{current_hash[:16]}...`\n")
+                    f.write(f"- **域名数量**: {domain_count}\n")
+                    f.write(f"- **文件大小**: {len(content):,} 字节\n")
+                    f.write(f"- **源文件**: [链接]({source_url})\n\n")
+                    f.write(f"## 最新文件\n\n")
+                    f.write(f"- [下载最新版本](./nrd-30day-mini-latest.txt)\n")
+                    f.write(f"- [查看历史版本](../archive/)\n\n")
+                    f.write(f"*此报告由GitHub Actions自动生成*\n")
+                
+                # 设置GitHub Actions输出
+                with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                    f.write(f"updated=true\n")
+                    f.write(f"filename={filename}\n")
+                    f.write(f"hash={current_hash[:16]}\n")
+                    f.write(f"domain_count={domain_count}\n")
+                    f.write(f"timestamp={timestamp}\n")
+                
+                log(f"✅ 所有文件已更新完成")
+                
+            else:
+                log("ℹ️  文件无更新")
+                with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                    f.write(f"updated=false\n")
+                    f.write(f"domain_count={domain_count}\n")
+        
+        except Exception as e:
+            log(f"❌ 错误: {e}")
+            exit(1)
+        
+        log("监控任务完成")
+        EOF
+    
+    - name: Commit and push changes
+      if: steps.monitor.outputs.updated == 'true'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action Bot"
+        git add .
+        git commit -m "🤖 Auto-update: NRD file ${{ steps.monitor.outputs.filename }} (domains: ${{ steps.monitor.outputs.domain_count }})" || exit 0
+        git push
+    
+    - name: Create summary
+      run: |
+        echo "## 📊 监控摘要" >> $GITHUB_STEP_SUMMARY
+        echo "- **检查时间**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.monitor.outputs.updated }}" == "true" ]; then
+          echo "- **状态**: ✅ 检测到更新" >> $GITHUB_STEP_SUMMARY
+          echo "- **新文件**: ${{ steps.monitor.outputs.filename }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **域名数量**: ${{ steps.monitor.outputs.domain_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **文件哈希**: ${{ steps.monitor.outputs.hash }}..." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- **状态**: ℹ️ 无更新" >> $GITHUB_STEP_SUMMARY
+          echo "- **域名数量**: ${{ steps.monitor.outputs.domain_count }}" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "- **源仓库**: [xRuffKez/NRD](https://github.com/xRuffKez/NRD)" >> $GITHUB_STEP_SUMMARY
