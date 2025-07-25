@@ -3,8 +3,8 @@ name: Monitor NRD File Updates
 
 on:
   schedule:
-    # 每15分钟检查一次（GitHub Actions最小间隔）
-    - cron: '*/15 * * * *'
+    # 每小时检查一次（GitHub Actions最小间隔）
+    cron: '0 * * * *'
   workflow_dispatch:  # 允许手动触发
   push:
     branches: [ main ]  # 推送到主分支时也触发（用于测试）
