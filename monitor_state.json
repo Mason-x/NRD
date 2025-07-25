@@ -1,0 +1,17 @@
+{
+  "hash": "e3517ba37febc5428a24f23e405212a578306bddfbe811f55c9b6bba41d77cc4",
+  "last_update": "2025-07-25T16:00:26.816910",
+  "filename": "nrd-30day-mini_20250725_160026.txt",
+  "domain_count": 3564241,
+  "update_history": [
+    {
+      "update_time": "2025-07-25T16:00:26.816898",
+      "timestamp": "20250725_160026",
+      "filename": "nrd-30day-mini_20250725_160026.txt",
+      "hash": "e3517ba37febc5428a24f23e405212a578306bddfbe811f55c9b6bba41d77cc4",
+      "domain_count": 3564241,
+      "file_size": 62487242,
+      "source_url": "https://raw.githubusercontent.com/xRuffKez/NRD/main/lists/30-day-mini/domains-only/nrd-30day-mini.txt"
+    }
+  ]
+}
