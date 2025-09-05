@@ -1,0 +1,80 @@
+name: Archive NRD domains-only snapshots
+
+on:
+  workflow_dispatch: {}           # 支持手动触发
+  schedule:
+    - cron: "0 */6 * * *"         # 每 6 小时（UTC）检查一次
+
+permissions:
+  contents: write                 # 允许推送提交
+
+concurrency:
+  group: archive-nrd-domains-only
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout your fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream NRD@main
+        run: |
+          set -euo pipefail
+          curl -L -o upstream.zip "https://github.com/xRuffKez/NRD/archive/refs/heads/main.zip"
+          unzip -q upstream.zip
+          test -d NRD-main/lists/30-day/domains-only
+
+      - name: Detect changes vs last snapshot
+        id: detect
+        run: |
+          set -euo pipefail
+          SRC="NRD-main/lists/30-day/domains-only"
+
+          # 计算目录内容指纹（按文件名排序后串联内容再哈希）
+          HASH="$( (cd "$SRC" && find . -type f -print0 | sort -z | xargs -0 cat 2>/dev/null || true) | sha256sum | cut -d' ' -f1 )"
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+
+          mkdir -p .state
+          PREV_HASH=""
+          [ -f .state/domains-only.latest ] && PREV_HASH="$(cat .state/domains-only.latest)"
+
+          if [ -n "$HASH" ] && [ "$HASH" = "$PREV_HASH" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Archive snapshot (date-named)
+        if: steps.detect.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          SRC="NRD-main/lists/30-day/domains-only"
+
+          # 归档根目录（你可以改成 lists/30-day/domains-only/snapshots 之类）
+          SNAPSHOT_ROOT="snapshots/domains-only"
+
+          # 用“日期命名”（含UTC时分，避免同日多次覆盖）
+          STAMP="$(date -u +'%Y-%m-%d_%H%MZ')"
+          TARGET="${SNAPSHOT_ROOT}/${STAMP}"
+
+          mkdir -p "$TARGET"
+          rsync -a "$SRC/" "$TARGET/"
+
+          # 记录本次哈希供下次对比
+          echo "${{ steps.detect.outputs.hash }}" > "$TARGET/.hash"
+          mkdir -p .state
+          echo "${{ steps.detect.outputs.hash }}" > .state/domains-only.latest
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A "$TARGET" .state/domains-only.latest
+          git commit -m "chore(archive): domains-only snapshot ${STAMP} (sha256=${{ steps.detect.outputs.hash }})"
+          git push
+
+      - name: No change
+        if: steps.detect.outputs.changed != 'true'
+        run: echo "No upstream changes; skipping commit."
